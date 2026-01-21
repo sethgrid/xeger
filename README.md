@@ -1,6 +1,53 @@
 # Xeger
 
-Xeger is a Go library and CLI tool that generates example strings matching a given regular expression. Think of it as the "reverse" of regex: instead of testing if a string matches a pattern, Xeger produces valid strings from patterns.
+**Xeger** (pronounced *zeh-ger*, rhymes with "germ") is a Go library and CLI tool that generates example strings matching a given regular expression. Think of it as the "reverse" of regex: instead of testing if a string matches a pattern, Xeger produces valid strings from patterns.
+
+## Quick Examples
+
+Generate realistic test data in seconds:
+
+```bash
+# Email addresses with popular domains
+$ xeger -n 5 "seth[a-z0-9]{4,8}@(gmail|yahoo|outlook)\.com"
+sethkdho@yahoo.com
+sethh8hk@outlook.com
+sethvwno@yahoo.com
+sethyju8@yahoo.com
+seth3zuh@outlook.com
+
+# Phone numbers
+$ xeger -n 3 "\+1-[0-9]{3}-[0-9]{3}-[0-9]{4}"
++1-774-045-9094
++1-829-087-5394
++1-954-009-0556
+
+# UUIDs
+$ xeger -n 3 "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+67683dee-fb78-55e2-1be3-36d89815e539
+78eb671e-f793-8280-b4fd-b56035d700df
+2e1e86fc-9e50-8fc4-1e54-64546b8b1379
+
+# Names with middle initial
+$ xeger -n 3 "[A-Z][a-z]+ [A-Z]\. [A-Z][a-z]+"
+Df Y. Bndx
+Lww B. Gf
+Iwq V. Lha
+
+# Credit card-like numbers
+$ xeger -n 2 "[0-9]{4}-[0-9]{4}-[0-9]{4}-[0-9]{4}"
+1234-5678-9012-3456
+9876-5432-1098-7654
+
+# Random alphanumeric IDs
+$ xeger -n 5 "[A-Z0-9]{8}"
+A3B7C9D1
+X2Y4Z6W8
+M5N7P9Q1
+R3S5T7U9
+V1W3X5Y7
+```
+
+Perfect for testing, fuzzing, documentation examples, and generating synthetic data!
 
 ## Features
 
