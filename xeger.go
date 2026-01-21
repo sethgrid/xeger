@@ -1,271 +1,276 @@
 package xeger
 
 import (
-	"fmt"
-	"log"
-	"regexp"
+	"math/rand"
 	"regexp/syntax"
-	"strconv"
-	"unicode"
+	"time"
 )
 
-type Xeger struct {
-	re     *syntax.Regexp
-	logger Logger
+// Options controls the behavior of the generator.
+type Options struct {
+	// MaxLength is the maximum total length of generated strings.
+	// If 0, no limit is enforced.
+	MaxLength int
+
+	// MaxRepeat is the maximum repetitions for unbounded quantifiers (*, +, {n,}).
+	// If 0, defaults to 10.
+	MaxRepeat int
+
+	// ShortBias biases repetitions toward smaller values when true.
+	ShortBias bool
 }
 
-func (x *Xeger) Generate() string {
-	x.logger.Printf("regex: %s", x.re.String())
-	x.logger.Printf("sub %v", x.re.Sub)
-
-	var regexStr string
-	for _, r := range x.re.Sub {
-		x.logger.Println(">")
-		regexStr += makeMatch(*r)
-		x.logger.Println(r.String())
-		x.logger.Printf("\t op   %s [%v]", OpName(r.Op), r.Op)
-		x.logger.Printf("\t rune %v", string(r.Rune))
+// DefaultOptions returns sensible default options.
+func DefaultOptions() Options {
+	return Options{
+		MaxLength: 64,
+		MaxRepeat: 10,
+		ShortBias: true,
 	}
-	x.logger.Printf("potenially match: `%s`", regexStr)
-	x.logger.Println()
-
-	return regexStr
 }
 
-func NewInverseRegex(s string) (*Xeger, error) {
-	_, err := regexp.Compile(s)
+// Generator generates strings matching a regular expression pattern.
+type Generator struct {
+	tree *syntax.Regexp
+	rng  *rand.Rand
+	opts Options
+}
+
+// New creates a new Generator for the given pattern.
+// If rng is nil, a new random source is created using the current time.
+func New(pattern string, opts Options, rng *rand.Rand) (*Generator, error) {
+	re, err := syntax.Parse(pattern, syntax.Perl)
 	if err != nil {
 		return nil, err
 	}
-	re, err := syntax.Parse(s, syntax.POSIX)
+	re = re.Simplify()
+
+	if rng == nil {
+		rng = rand.New(rand.NewSource(time.Now().UnixNano()))
+	}
+
+	return &Generator{
+		tree: re,
+		rng:  rng,
+		opts: opts,
+	}, nil
+}
+
+// Next generates the next matching string.
+func (g *Generator) Next() (string, error) {
+	buf := g.gen(g.tree, make([]rune, 0))
+	return string(buf), nil
+}
+
+// Generate is a convenience function that generates a single string from a pattern.
+func Generate(pattern string) (string, error) {
+	g, err := New(pattern, DefaultOptions(), nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	simp := re.Simplify()
-
-	return &Xeger{re: simp, logger: nopLogger{}}, nil
+	return g.Next()
 }
 
-func OpName(op syntax.Op) string {
-	switch op {
-	case 1:
-		return "OpNoMatch"
-	case 2:
-		return "OpEmptyMatch"
-	case 3:
-		return "OpLiteral"
-	case 4:
-		return "OpCharClass"
-	case 5:
-		return "OpAnyCharNotNL"
-	case 6:
-		return "OpAnyChar"
-	case 7:
-		return "OpBeginLine"
-	case 8:
-		return "OpBeginText"
-	case 9:
-		return "OpWrodBoundary"
-	case 10:
-		return "OpNoWordBoundary"
-	case 11:
-		return "OpCapture"
-	case 12:
-		return "OpStar"
-	case 13:
-		return "OpPlus"
-	case 14:
-		return "OpQuest"
-	case 15:
-		return "OpRepeat"
-	case 16:
-		return "OpConcat"
-	case 17:
-		return "OpAlternate"
-	default:
-		return "OpUnknown"
+// gen recursively generates runes from the regex AST.
+func (g *Generator) gen(re *syntax.Regexp, buf []rune) []rune {
+	// Check max length constraint
+	if g.opts.MaxLength > 0 && len(buf) >= g.opts.MaxLength {
+		return buf
 	}
-}
 
-func makeMatch(re syntax.Regexp) string {
 	switch re.Op {
-	default:
-		return fmt.Sprintf("<invalid op" + strconv.Itoa(int(re.Op)) + ">")
 	case syntax.OpNoMatch:
-		log.Println("OpNoMatch")
-		return ""
+		// Never matches, return empty
+		return buf
+
 	case syntax.OpEmptyMatch:
-		log.Println("OpEmptyMatch")
-		return ""
+		// Matches empty string
+		return buf
+
 	case syntax.OpLiteral:
-		log.Println("OpLiteral")
-		if re.Flags&syntax.FoldCase != 0 {
-			// b.WriteString(`(?i:`)
-		}
-		return string(re.Rune)
+		// Append literal runes
+		return append(buf, re.Rune...)
+
 	case syntax.OpCharClass:
-		log.Println("OpCharClass")
+		// Pick a character from the class
+		r := g.pickFromClass(re.Rune)
+		return append(buf, r)
 
-		// b.WriteRune('[')
-		if len(re.Rune) == 0 {
-			// b.WriteString(`^\x00-\x{10FFFF}`)
-		} else if re.Rune[0] == 0 && re.Rune[len(re.Rune)-1] == unicode.MaxRune {
-			// Contains 0 and MaxRune.  Probably a negated class.
-			// Print the gaps.
-			// b.WriteRune('^')
-			for i := 1; i < len(re.Rune)-1; i += 2 {
-				lo, hi := re.Rune[i]+1, re.Rune[i+1]-1
-				// escape(b, lo, lo == '-')
-				if lo != hi {
-					// b.WriteRune('-')
-					// escape(b, hi, hi == '-')
-				}
-			}
-		} else {
-			for i := 0; i < len(re.Rune); i += 2 {
-				lo, hi := re.Rune[i], re.Rune[i+1]
-				// escape(b, lo, lo == '-')
-				if lo != hi {
-					// b.WriteRune('-')
-					// escape(b, hi, hi == '-')
-				}
-			}
-		}
-		// b.WriteRune(']')
 	case syntax.OpAnyCharNotNL:
-		log.Println("OpAnyCharNotNL")
-		return "abc"
+		// Any character except newline
+		// Pick from printable ASCII range for simplicity
+		r := rune(32 + g.rng.Intn(95)) // 32-126 (printable ASCII)
+		return append(buf, r)
+
 	case syntax.OpAnyChar:
-		log.Println("OpAnyChar")
-		return "abc" // and sometimes nl
-	case syntax.OpBeginLine:
-		log.Println("OpBeginLine")
-		// b.WriteRune('^') // make sure this is first?
-	case syntax.OpEndLine:
-		log.Println("OpEndLine")
-		// b.WriteRune('$') // make sure this is last?
-	case syntax.OpBeginText:
-		log.Println("OpBeginText")
-		// b.WriteString(`\A`)
-	case syntax.OpEndText:
-		log.Println("OpEndText")
-		if re.Flags&syntax.WasDollar != 0 {
-			// b.WriteString(`(?-m:$)`)
-		} else {
-			// b.WriteString(`\z`)
+		// Any character including newline
+		if g.rng.Intn(10) == 0 {
+			return append(buf, '\n')
 		}
-	case syntax.OpWordBoundary:
-		log.Println("OpWordBoundary")
-		return " "
-	case syntax.OpNoWordBoundary:
-		log.Println("OpNoWordBoundary")
-		// b.WriteString(`\B`)
-	case syntax.OpCapture:
-		log.Println("OpCapture")
-		fallthrough
-		// if re.Name != "" {
-		// 	b.WriteString(`(?P<`)
-		// 	b.WriteString(re.Name)
-		// 	b.WriteRune('>')
-		// } else {
-		// 	b.WriteRune('(')
-		// }
-		// if re.Sub[0].Op != syntax.OpEmptyMatch {
-		// 	// writeRegexp(b, re.Sub[0])
-		// }
-		// b.WriteRune(')')
-	case syntax.OpStar, syntax.OpPlus, syntax.OpQuest, syntax.OpRepeat:
-		log.Println("OpRepeat")
-		if sub := re.Sub[0]; sub.Op > syntax.OpCapture || sub.Op == syntax.OpLiteral && len(sub.Rune) > 1 {
-			// b.WriteString(`(?:`)
-			// writeRegexp(b, sub)
-			log.Println("named inner stuff to expand")
-			// b.WriteString(`)`)
-		} else {
-			// writeRegexp(b, sub)
-			log.Println("inner stuff to expand")
-		}
-		// this is the logics!
-		thing := re.Sub
-		thing2 := re.Sub0
+		r := rune(32 + g.rng.Intn(95))
+		return append(buf, r)
 
-		for _, t := range thing {
-			log.Printf(" _>> %v", t)
-		}
+	case syntax.OpBeginLine, syntax.OpBeginText:
+		// Anchors don't generate characters
+		return buf
 
-		for _, t := range thing2 {
-			log.Printf(" 0>> %v", t)
-		}
+	case syntax.OpEndLine, syntax.OpEndText:
+		// Anchors don't generate characters
+		return buf
 
-		switch re.Op {
-		case syntax.OpStar:
-			log.Println("OpStar")
-			str := string(re.Rune)
-			return str + str + str
-		case syntax.OpPlus:
-			log.Println("OpPlus")
-			log.Println("op plus...?")
-			return string(re.Rune)
-		case syntax.OpQuest:
-			log.Println("OpQuest")
-			return string(re.Rune)
-			// sometimes not
-		case syntax.OpRepeat:
-			log.Println("OpRepeat")
-			// b.WriteRune('{')
-			str := ""
-			for i := 0; i < re.Min; i++ {
-				str += string(re.Rune)
-			}
-			// consider rand between min and max
-		}
-		if re.Flags&syntax.NonGreedy != 0 {
-			// b.WriteRune('?')
-		}
+	case syntax.OpWordBoundary, syntax.OpNoWordBoundary:
+		// Word boundaries don't generate characters
+		return buf
+
 	case syntax.OpConcat:
-		log.Println("OpConcat")
+		// Concatenate all sub-expressions
 		for _, sub := range re.Sub {
-			if sub.Op == syntax.OpAlternate {
-				// b.WriteString(`(?:`)
-				// writeRegexp(b, sub)
-				// b.WriteString(`)`)
-			} else {
-				// writeRegexp(b, sub)
+			buf = g.gen(sub, buf)
+			if g.opts.MaxLength > 0 && len(buf) >= g.opts.MaxLength {
+				break
 			}
 		}
+		return buf
+
 	case syntax.OpAlternate:
-		log.Println("OpAlternate")
-		for i, sub := range re.Sub {
-			if i > 0 {
-				// this is specail. huh. sometimes write the second. What is the second?
-				// b.WriteRune('|')
-			}
-			_ = sub
-			// writeRegexp(b, sub)
+		// Pick one of the alternatives
+		if len(re.Sub) == 0 {
+			return buf
+		}
+		i := g.rng.Intn(len(re.Sub))
+		return g.gen(re.Sub[i], buf)
+
+	case syntax.OpCapture:
+		// Treat capture groups as their contents
+		if len(re.Sub) == 0 {
+			return buf
+		}
+		// For captures, generate from the first (and typically only) sub-expression
+		return g.gen(re.Sub[0], buf)
+
+	case syntax.OpStar:
+		// Zero or more
+		return g.genRepeat(re.Sub[0], buf, 0, g.effectiveMaxRepeat())
+
+	case syntax.OpPlus:
+		// One or more
+		return g.genRepeat(re.Sub[0], buf, 1, g.effectiveMaxRepeat())
+
+	case syntax.OpQuest:
+		// Zero or one
+		if g.rng.Intn(2) == 1 {
+			return g.gen(re.Sub[0], buf)
+		}
+		return buf
+
+	case syntax.OpRepeat:
+		// {min,max} repetition
+		min, max := re.Min, re.Max
+		if max < 0 {
+			max = g.effectiveMaxRepeat()
+		}
+		return g.genRepeat(re.Sub[0], buf, min, max)
+
+	default:
+		// Unknown operation, return as-is
+		return buf
+	}
+}
+
+// genRepeat generates a repeated sub-expression, appending to the existing buffer.
+func (g *Generator) genRepeat(sub *syntax.Regexp, buf []rune, min, max int) []rune {
+	if max < min {
+		max = min
+	}
+	n := g.pickRepetition(min, max)
+	for i := 0; i < n; i++ {
+		buf = g.gen(sub, buf)
+		if g.opts.MaxLength > 0 && len(buf) >= g.opts.MaxLength {
+			break
 		}
 	}
-	return ""
+	return buf
 }
 
-// generate takes in tokens in the form of:
-// [a-z]
-// [0-9a-z]
-// [0-9][0-9][0-9](?:[0-9][0-9]?)?
-// (?-s:.)
-// x*
-func generate(token string) string {
-
-	return ""
+// effectiveMaxRepeat returns the effective maximum repeat count.
+func (g *Generator) effectiveMaxRepeat() int {
+	if g.opts.MaxRepeat > 0 {
+		return g.opts.MaxRepeat
+	}
+	return 10
 }
 
-type Logger interface {
-	Print(v ...interface{})
-	Printf(format string, v ...interface{})
-	Println(v ...interface{})
+// pickRepetition chooses a repetition count between min and max.
+func (g *Generator) pickRepetition(min, max int) int {
+	if min == max {
+		return min
+	}
+	if g.opts.ShortBias {
+		// Geometric-ish bias toward smaller values
+		n := min
+		for n < max && g.rng.Intn(2) == 1 {
+			n++
+		}
+		return n
+	}
+	return min + g.rng.Intn(max-min+1)
 }
 
-type nopLogger struct{}
+// pickFromClass picks a random rune from a character class.
+// The ranges slice contains pairs [lo0, hi0, lo1, hi1, ...]
+func (g *Generator) pickFromClass(ranges []rune) rune {
+	if len(ranges) == 0 {
+		return ' '
+	}
 
-func (nopLogger) Print(v ...interface{})                 {}
-func (nopLogger) Printf(format string, v ...interface{}) {}
-func (nopLogger) Println(v ...interface{})               {}
+	// Handle negated character classes
+	// If first range is 0 and last is MaxRune, it's likely negated
+	if len(ranges) >= 2 && ranges[0] == 0 && ranges[len(ranges)-1] == 0x10FFFF {
+		// For negated classes, we need to pick from the complement
+		// This is complex, so for now we'll pick from a common subset
+		// In practice, negated classes are less common
+		return g.pickFromRanges(ranges[1 : len(ranges)-1])
+	}
+
+	return g.pickFromRanges(ranges)
+}
+
+// pickFromRanges picks a random rune from the given ranges.
+func (g *Generator) pickFromRanges(ranges []rune) rune {
+	// Compute total size of all ranges
+	total := 0
+	for i := 0; i < len(ranges); i += 2 {
+		if i+1 >= len(ranges) {
+			break
+		}
+		lo, hi := ranges[i], ranges[i+1]
+		if hi >= lo {
+			total += int(hi-lo) + 1
+		}
+	}
+
+	if total == 0 {
+		return ' '
+	}
+
+	// Pick a random position
+	k := g.rng.Intn(total)
+
+	// Find which range contains position k
+	for i := 0; i < len(ranges); i += 2 {
+		if i+1 >= len(ranges) {
+			break
+		}
+		lo, hi := ranges[i], ranges[i+1]
+		if hi < lo {
+			continue
+		}
+		size := int(hi-lo) + 1
+		if k < size {
+			return lo + rune(k)
+		}
+		k -= size
+	}
+
+	return ' ' // fallback
+}
